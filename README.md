@@ -2,7 +2,7 @@
 
 This project is a C++ version implementation of the particle filter algorithm. It realizes the same functionality as this reference [python version implementation](https://github.com/mit-racecar/particle_filter).
 
-It depends on the library [RangeLibc](https://github.com/kctess5/range_libc) for fast 2D ray casting. For easy usage, we make slight modifcations and convert it into ROS package format, see this [fork](https://github.com/nanli42/particle_filter_cpp). In this project, we use the `find_package(catkin REQUIRED COMPONENTS ... range_libc)` and `catkin_package(CATKIN_DEPENDS ... range_libc)` in `CMakeLists.txt` to include it.
+It depends on the library [RangeLibc](https://github.com/kctess5/range_libc) for fast 2D ray casting. For easy usage, we make slight modifcations and convert it into ROS package format, see this [fork](https://github.com/nanli42/range_libc). In this project, we use the `find_package(catkin REQUIRED COMPONENTS ... range_libc)` and `catkin_package(CATKIN_DEPENDS ... range_libc)` in `CMakeLists.txt` to include it.
 
 The code style is inspired by the project [droemer7/localize](https://github.com/droemer7/localize) which is highly recommanded for the AMCL (Adaptive Monte Carlo Localization) problem.
 
