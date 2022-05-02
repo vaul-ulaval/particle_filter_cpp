@@ -4,13 +4,22 @@ project(particle_filter)
 ## Add support for C++11, supported in ROS Kinetic and newer
 # add_definitions(-std=c++11)
 
+# Add support for CUDA
+add_definitions(-DUSE_CUDA=1)
+#set(CMAKE_BUILD_TYPE Debug)
+
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   rospy
+  roscpp
   sensor_msgs
   std_msgs
+  range_libc
+  tf
+  nav_msgs
+  geometry_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -106,6 +115,11 @@ catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES particle_filter
   CATKIN_DEPENDS  message_runtime rospy sensor_msgs std_msgs
+    roscpp
+    range_libc
+    tf
+    nav_msgs
+    geometry_msgs
 #  DEPENDS system_lib
 )
 
@@ -117,6 +131,7 @@ catkin_package(
 ## Your package locations should be listed before other locations
 # include_directories(include)
 include_directories(
+  include
   ${catkin_INCLUDE_DIRS}
 )
 
@@ -133,7 +148,10 @@ include_directories(
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
-# add_executable(${PROJECT_NAME}_node src/particle_filter_node.cpp)
+add_executable(${PROJECT_NAME}_cpp_node
+  src/particle_filter_cpp/main.cpp
+  src/particle_filter_cpp/particle_filter.cpp
+)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -146,9 +164,9 @@ include_directories(
 # add_dependencies(${PROJECT_NAME}_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
-# target_link_libraries(${PROJECT_NAME}_node
-#   ${catkin_LIBRARIES}
-# )
+target_link_libraries(${PROJECT_NAME}_cpp_node
+  ${catkin_LIBRARIES}
+)
 
 #############
 ## Install ##
