@@ -217,9 +217,18 @@ private:
   double squash_factor_;
   double max_range_;
 
-	// Timing related variables
-	double sensor_model_calc_worst_time_;
-	double motion_model_calc_worst_time_;
+  // Timing related variables
+  double sensor_model_calc_worst_time_;
+  double motion_model_calc_worst_time_;
+  
+  // Set up array pointers 
+  float *angles_;
+  float *obs_;
+  float *outs_;
+  double *weights_;
+  float *samples_;
+  float *viz_queries_;
+  float *viz_ranges_;
 };
 
 #endif

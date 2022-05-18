@@ -247,6 +247,16 @@ void ParticleFilter::lidarCB(const sensor_msgs::LaserScan& msg) {
       downsampled_laser_angles_.push_back(angle_min_ + angle_increment_ * i);
     }
     num_downsampled_angles_ = downsampled_laser_angles_.size();
+
+    // allocate memory
+    angles_ = new float[num_downsampled_angles_];
+    obs_ = new float[num_downsampled_angles_];
+    outs_ = new float[num_downsampled_angles_*max_particles_num_];
+    weights_ = new double[max_particles_num_];
+    samples_ = new float[max_particles_num_*3];
+    viz_queries_ = new float[num_downsampled_angles_*3];
+    viz_ranges_ = new float[num_downsampled_angles_];
+
     lidar_initialized_ = true;
   }
 
@@ -371,43 +381,38 @@ void ParticleFilter::motionModel() {
 
 void ParticleFilter::sensorModel() {
   if (rangelib_variant_ == VAR_REPEAT_ANGLES_EVAL_SENSOR) {
-    float *angles = new float[num_downsampled_angles_];
-    float *obs = new float[num_downsampled_angles_];
-    float *outs = new float[num_downsampled_angles_*max_particles_num_];
-    double *weights = new double[max_particles_num_];
 
     Time t_start = Clock::now();
 
-    float *samples = new float[max_particles_num_*3];
     for (int i = 0; i < max_particles_num_; i++) {
-      samples[i*3+0] = (float)particles_[i].x;
-      samples[i*3+1] = (float)particles_[i].y;
-      samples[i*3+2] = (float)particles_[i].theta;
+      samples_[i*3+0] = (float)particles_[i].x;
+      samples_[i*3+1] = (float)particles_[i].y;
+      samples_[i*3+2] = (float)particles_[i].theta;
     }
 
     for (int i = 0; i < num_downsampled_angles_; i++) {
-      angles[i] = (float)(downsampled_laser_angles_[i]);
-      obs[i] = (float)(downsampled_laser_ranges_[i]);
+      angles_[i] = (float)(downsampled_laser_angles_[i]);
+      obs_[i] = (float)(downsampled_laser_ranges_[i]);
     }
 
     Time t_init = Clock::now();
 
-    (dynamic_cast<RayMarchingGPU*> (range_method_))->numpy_calc_range_angles(samples, angles, outs, max_particles_num_, num_downsampled_angles_);
+    (dynamic_cast<RayMarchingGPU*> (range_method_))->numpy_calc_range_angles(samples_, angles_, outs_, max_particles_num_, num_downsampled_angles_);
 
     Time t_range = Clock::now();
 
-    (dynamic_cast<RayMarchingGPU*> (range_method_))->eval_sensor_model(obs, outs, weights, num_downsampled_angles_, max_particles_num_);
+    (dynamic_cast<RayMarchingGPU*> (range_method_))->eval_sensor_model(obs_, outs_, weights_, num_downsampled_angles_, max_particles_num_);
 
     Time t_eval = Clock::now();
 
     double inv_squash_factor = 1.0 / squash_factor_;
     double weight_sum = 0.0;
     for (int i = 0; i < max_particles_num_; i++) {
-      weights[i] = pow(weights[i], inv_squash_factor);
-      weight_sum += weights[i];
+      weights_[i] = pow(weights_[i], inv_squash_factor);
+      weight_sum += weights_[i];
     }
     for (int i = 0; i < max_particles_num_; i++) {
-      particles_[i].weight = weights[i] / weight_sum;
+      particles_[i].weight = weights_[i] / weight_sum;
     }
 
     Time t_squash = Clock::now();
@@ -517,17 +522,15 @@ void ParticleFilter::visualize() {
 
   // Publish simulated scan from the inferred position
   if (!(isnan(expected_pose_.x) || isnan(expected_pose_.y) || isnan(expected_pose_.theta)) && fake_scan_pub_.getNumSubscribers()>0) {
-    float *viz_queries = new float[num_downsampled_angles_*3];
-    float *viz_ranges = new float[num_downsampled_angles_];
     double max_range = -1e+6;
     for (int i = 0; i < num_downsampled_angles_; i++) {
-      viz_queries[i*3+0] = expected_pose_.x;
-      viz_queries[i*3+1] = expected_pose_.y;
-      viz_queries[i*3+2] = expected_pose_.theta + downsampled_laser_angles_[i];
+      viz_queries_[i*3+0] = expected_pose_.x;
+      viz_queries_[i*3+1] = expected_pose_.y;
+      viz_queries_[i*3+2] = expected_pose_.theta + downsampled_laser_angles_[i];
       if (downsampled_laser_ranges_[i] > max_range)
         max_range = downsampled_laser_ranges_[i];
     }
-    (dynamic_cast<RayMarchingGPU*> (range_method_))->numpy_calc_range(viz_queries, viz_ranges, num_downsampled_angles_);
+    (dynamic_cast<RayMarchingGPU*> (range_method_))->numpy_calc_range(viz_queries_, viz_ranges_, num_downsampled_angles_);
     sensor_msgs::LaserScan scan;
     scan.header.stamp = last_stamp_;
     scan.header.frame_id = "laser"; // for f1tenth_gym, it might be something like "ego_racecar/laser"
@@ -538,7 +541,7 @@ void ParticleFilter::visualize() {
     scan.range_max = max_range;
     scan.ranges.resize(num_downsampled_angles_);
     for(int i = 0; i < num_downsampled_angles_; i++) {
-      scan.ranges[i] = viz_ranges[i];
+      scan.ranges[i] = viz_ranges_[i];
     }
     fake_scan_pub_.publish(scan);
   }
