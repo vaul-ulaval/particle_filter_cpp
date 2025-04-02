@@ -1,15 +1,17 @@
-#include "particle_filter.h"
+#include "particle_filter.hpp"
 
 int main(int argc, char **argv) {
-
-  // Initialize ROS node
-  ros::init(argc, argv, "particle_filter_cpp");
+  // Initialize ROS2 node
+  rclcpp::init(argc, argv);
 
   // Create a Particle Filter node
-  ParticleFilter pf;
+  auto pf_node = std::make_shared<ParticleFilter>();
 
-  // Run PF node until ROS is shutdown
-  ros::waitForShutdown();
+  // Run PF node until ROS2 is shutdown
+  rclcpp::spin(pf_node);
+
+  // Clean up
+  rclcpp::shutdown();
 
   return 0;
 }
