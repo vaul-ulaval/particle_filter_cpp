@@ -17,8 +17,8 @@ find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(range_libc REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -33,11 +33,12 @@ find_package(rosidl_default_generators REQUIRED)
 # Include directories
 include_directories(
   include
+  /usr/local/include
 )
+link_directories(/usr/local/lib)
 
 # Create the C++ node executable
 add_executable(${PROJECT_NAME}_cpp_node
-  src/particle_filter_cpp/main.cpp
   src/particle_filter_cpp/particle_filter.cpp
 )
 
@@ -46,12 +47,16 @@ ament_target_dependencies(${PROJECT_NAME}_cpp_node
   rclcpp
   sensor_msgs
   std_msgs
-  range_libc
   tf2
   tf2_ros
   nav_msgs
   geometry_msgs
+  tf2_geometry_msgs
 )
+
+# target_link_libraries(${PROJECT_NAME}_cpp_node
+#   range_lib
+# )
 
 # Install executables
 install(TARGETS
@@ -77,7 +82,7 @@ ament_export_dependencies(
   rclcpp
   sensor_msgs
   std_msgs
-  range_libc
+  range_lib
   tf2
   tf2_ros
   nav_msgs

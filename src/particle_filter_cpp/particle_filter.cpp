@@ -1,10 +1,14 @@
-#include "particle_filter.h"
+#include "particle_filter.hpp"
+#include <rclcpp/exceptions/exceptions.hpp>
+#include <tf2/LinearMath/Matrix3x3.hpp>
+#include "nav_msgs/msg/occupancy_grid.hpp"
 
 ParticleFilter::ParticleFilter()
     : Node("particle_filter"), map_initialized_(false), odom_initialized_(false), lidar_initialized_(false), motion_model_calc_worst_time_(0.0), sensor_model_calc_worst_time_(0.0) {
     loadParam();
-    loadMap();
+    RCLCPP_INFO(this->get_logger(), "MOM");
     precomputeSensorModel();
+    RCLCPP_INFO(this->get_logger(), "MOM");
     initializeGlobalDistribution();
 
     // Initialize TF broadcaster
@@ -25,6 +29,8 @@ ParticleFilter::ParticleFilter()
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(odometry_topic_, qos, std::bind(&ParticleFilter::odomCB, this, std::placeholders::_1));
 
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", qos, std::bind(&ParticleFilter::clickedPoseCB, this, std::placeholders::_1));
+
+    map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>("/map", qos, std::bind(&ParticleFilter::mapCB, this, std::placeholders::_1));
 
     // Set up map client
     map_client_ = create_client<nav_msgs::srv::GetMap>("static_map");
@@ -61,48 +67,27 @@ void ParticleFilter::loadParam() {
     th_dist_ = std::uniform_real_distribution<double>();
 }
 
-void ParticleFilter::loadMap() {
-    // Wait for the map service to be available
-    RCLCPP_INFO(get_logger(), "Requesting the map...");
-    while (!map_client_->wait_for_service(std::chrono::seconds(3))) {
-        if (!rclcpp::ok()) {
-            RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the map service. Exiting.");
-            throw std::runtime_error("Interrupted while waiting for map service");
-        }
-        RCLCPP_INFO(get_logger(), "Map service not available, waiting again...");
-    }
+void ParticleFilter::mapCB(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
+    loaded_map_ = msg;
+    RCLCPP_INFO(get_logger(), "1");
 
-    // Create request and response objects
-    auto request = std::make_shared<nav_msgs::srv::GetMap::Request>();
-    auto result_future = map_client_->async_send_request(request);
-
-    // Wait for the result
-    if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), result_future) == rclcpp::FutureReturnCode::SUCCESS) {
-        auto result = result_future.get();
-        loaded_map_ = result->map;
-        RCLCPP_INFO(get_logger(), "Successfully loaded the map.");
-    } else {
-        RCLCPP_ERROR(get_logger(), "Failed to call map service");
-        throw std::runtime_error("Failed to call map service!");
-    }
-
-    int rows = loaded_map_.info.height;
-    int cols = loaded_map_.info.width;
-    double mapResolution = loaded_map_.info.resolution;
+    int rows = loaded_map_->info.height;
+    int cols = loaded_map_->info.width;
+    double mapResolution = loaded_map_->info.resolution;
     RCLCPP_INFO(get_logger(), "Received a %d X %d map @ %.3f m/px",
-                loaded_map_.info.height,  // rows
-                loaded_map_.info.width,   // cols
-                loaded_map_.info.resolution);
+                loaded_map_->info.height,  // rows
+                loaded_map_->info.width,   // cols
+                loaded_map_->info.resolution);
 
     // max range in pixel
     max_range_px_ = (int)(max_range_ / mapResolution);
 
     // Transform loaded map into OMap format which is needed by range_libc
     // ref: originale range_libc project - range_libc/pywrapper/RangeLibc.pyx, line 146 USE_ROS_MAP
-    OMap map = OMap(loaded_map_.info.height, loaded_map_.info.width);
-    for (int i = 0; i < loaded_map_.info.height; i++) {
-        for (int j = 0; j < loaded_map_.info.width; j++) {
-            if (loaded_map_.data[i * loaded_map_.info.width + j] == 0)
+    OMap map = OMap(loaded_map_->info.height, loaded_map_->info.width);
+    for (int i = 0; i < loaded_map_->info.height; i++) {
+        for (int j = 0; j < loaded_map_->info.width; j++) {
+            if (loaded_map_->data[i * loaded_map_->info.width + j] == 0)
                 map.grid[i][j] = false;  // free space
             else
                 map.grid[i][j] = true;  // occupied
@@ -111,13 +96,15 @@ void ParticleFilter::loadMap() {
 
     // Use tf2 for quaternion conversion in ROS 2
     tf2::Quaternion q;
-    tf2::fromMsg(loaded_map_.info.origin.orientation, q);
-    double angle = -1.0 * tf2::getYaw(q);
+    tf2::fromMsg(loaded_map_->info.origin.orientation, q);
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+    double angle = -1.0 * yaw;
 
-    map.world_scale = loaded_map_.info.resolution;
+    map.world_scale = loaded_map_->info.resolution;
     map.world_angle = angle;
-    map.world_origin_x = loaded_map_.info.origin.position.x;
-    map.world_origin_y = loaded_map_.info.origin.position.y;
+    map.world_origin_x = loaded_map_->info.origin.position.x;
+    map.world_origin_y = loaded_map_->info.origin.position.y;
     map.world_sin_angle = sin(angle);
     map.world_cos_angle = cos(angle);
 
@@ -131,16 +118,19 @@ void ParticleFilter::loadMap() {
             "Or modified the code in ParticleFilter::loadMap().");
     }
 
+    RCLCPP_INFO(get_logger(), "2");
     map_initialized_ = true;
 }
 
 void ParticleFilter::precomputeSensorModel() {
+    RCLCPP_INFO(get_logger(), "precompute 1");
     if (rangelib_variant_ == 0) return;
 
     // Build a lookup table for sensor model with the given static map
     int table_width = max_range_px_ + 1;
     double* table = new double[table_width * table_width];
 
+    RCLCPP_INFO(get_logger(), "precompute 2");
     // Calculate for each possible simulated LiDAR range value d and potential observed range value r
     for (int d = 0; d < table_width; d++) {
         double norm = 0.0;
@@ -156,6 +146,7 @@ void ParticleFilter::precomputeSensorModel() {
         }
         for (int r = 0; r < table_width; r++) table[r * table_width + d] /= norm;
     }
+    RCLCPP_INFO(get_logger(), "precompute 3");
 
     // Call for method provided in ray casting library range_libc
     (dynamic_cast<RayMarchingGPU*>(range_method_))->set_sensor_model(table, table_width);
@@ -166,8 +157,8 @@ void ParticleFilter::initializeGlobalDistribution() {
     RecursiveLock lock(particles_mtx_);
 
     // Set particle distribution inside the map
-    std::uniform_real_distribution<double> global_x_dist_(0, loaded_map_.info.width);
-    std::uniform_real_distribution<double> global_y_dist_(0, loaded_map_.info.height);
+    std::uniform_real_distribution<double> global_x_dist_(0, loaded_map_->info.width);
+    std::uniform_real_distribution<double> global_y_dist_(0, loaded_map_->info.height);
     std::uniform_real_distribution<double> global_th_dist_(std::nextafter(-M_PI, std::numeric_limits<double>::max()), std::nextafter(+M_PI, std::numeric_limits<double>::max()));
 
     // Initialize all max_particles_num_ particles
@@ -178,7 +169,7 @@ void ParticleFilter::initializeGlobalDistribution() {
         while (occupied) {
             idx_x = (int)(global_x_dist_(rng_.engine()));
             idx_y = (int)(global_y_dist_(rng_.engine()));
-            occupied = (idx_x < 0 || idx_x > loaded_map_.info.width || idx_y < 0 || idx_y > loaded_map_.info.height || loaded_map_.data[idx_y * loaded_map_.info.width + idx_x]);
+            occupied = (idx_x < 0 || idx_x > loaded_map_->info.width || idx_y < 0 || idx_y > loaded_map_->info.height || loaded_map_->data[idx_y * loaded_map_->info.width + idx_x]);
         }
         std::vector<int> idx = {idx_x, idx_y};
         std::vector<double> pos = mapToWorld(idx);
@@ -212,13 +203,14 @@ void ParticleFilter::initializeParticlesPose(const geometry_msgs::msg::PoseWithC
             std::vector<int> idx = worldToMap(pos);
             idx_x = idx[0];
             idx_y = idx[1];
-            occupied = (idx_x < 0 || idx_x > loaded_map_.info.width || idx_y < 0 || idx_y > loaded_map_.info.height || loaded_map_.data[idx_y * loaded_map_.info.width + idx_x]);
+            occupied = (idx_x < 0 || idx_x > loaded_map_->info.width || idx_y < 0 || idx_y > loaded_map_->info.height || loaded_map_->data[idx_y * loaded_map_->info.width + idx_x]);
         }
 
         // Use tf2 for quaternion conversion in ROS 2
         tf2::Quaternion q;
         tf2::fromMsg(pose.orientation, q);
-        double yaw = tf2::getYaw(q);
+        double roll, pitch, yaw;
+        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
 
         ParticleState ps = {dx + pose.position.x, dy + pose.position.y, local_th_dist_(rng_.engine()) + yaw, 1.0 / max_particles_num_};
         particles_.push_back(ps);
@@ -263,7 +255,8 @@ void ParticleFilter::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
         // Use tf2 for quaternion conversion in ROS 2
         tf2::Quaternion q;
         tf2::fromMsg(msg->pose.pose.orientation, q);
-        double current_yaw = tf2::getYaw(q);
+        double roll, pitch, current_yaw;
+        tf2::Matrix3x3(q).getRPY(roll, pitch, current_yaw);
 
         double dtheta = current_yaw - last_pose_[2];
         double c = cos(-last_pose_[2]);
@@ -284,7 +277,9 @@ void ParticleFilter::odomCB(const nav_msgs::msg::Odometry::SharedPtr msg) {
     // Use tf2 for quaternion conversion in ROS 2
     tf2::Quaternion q;
     tf2::fromMsg(msg->pose.pose.orientation, q);
-    last_pose_.push_back(tf2::getYaw(q));
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+    last_pose_.push_back(yaw);
 
     last_stamp_ = msg->header.stamp;
 
@@ -546,11 +541,16 @@ std::vector<int> ParticleFilter::worldToMap(std::vector<double> position) {
     double x = position[0];
     double y = position[1];
 
-    double scale = loaded_map_.info.resolution;
-    double angle = -1.0 * tf2::getYaw(loaded_map_.info.origin.orientation);
+    double scale = loaded_map_->info.resolution;
 
-    x -= loaded_map_.info.origin.position.x;
-    y -= loaded_map_.info.origin.position.y;
+    tf2::Quaternion q;
+    tf2::fromMsg(loaded_map_->info.origin.orientation, q);
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+    double angle = -1.0 * yaw;
+
+    x -= loaded_map_->info.origin.position.x;
+    y -= loaded_map_->info.origin.position.y;
 
     double c = cos(angle);
     double s = sin(angle);
@@ -577,17 +577,21 @@ std::vector<double> ParticleFilter::mapToWorld(std::vector<int> idx) {
     int map_y = idx[1];
     double x, y;
 
-    double scale = loaded_map_.info.resolution;
-    double angle = tf2::getYaw(loaded_map_.info.origin.orientation);
+    double scale = loaded_map_->info.resolution;
 
+    tf2::Quaternion q;
+    tf2::fromMsg(loaded_map_->info.origin.orientation, q);
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+    double angle = yaw;
     double c = cos(angle);
     double s = sin(angle);
     double temp = map_x;
     x = c * map_x - s * map_y;
     y = s * temp + c * map_y;
 
-    x = x * scale + loaded_map_.info.origin.position.x;
-    y = y * scale + loaded_map_.info.origin.position.y;
+    x = x * scale + loaded_map_->info.origin.position.x;
+    y = y * scale + loaded_map_->info.origin.position.y;
 
     result.push_back(x);
     result.push_back(y);
@@ -599,4 +603,20 @@ std::vector<double> ParticleFilter::mapToWorld(std::vector<int> idx) {
     }
 
     return result;
+}
+
+int main(int argc, char** argv) {
+    // Initialize ROS2 node
+    rclcpp::init(argc, argv);
+
+    // Create a Particle Filter node
+    auto pf_node = std::make_shared<ParticleFilter>();
+
+    // Run PF node until ROS2 is shutdown
+    rclcpp::spin(pf_node);
+
+    // Clean up
+    rclcpp::shutdown();
+
+    return 0;
 }
